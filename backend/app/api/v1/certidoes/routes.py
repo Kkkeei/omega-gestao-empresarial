@@ -1,0 +1,96 @@
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
+
+from app.schemas.certidoes import CertidaoCreate
+from app.services.certidoes_service import (
+    consultar_estadual,
+    consultar_estadual_todas,
+    historico,
+    listar,
+    obter_pdf_path,
+    registrar,
+    tipos,
+)
+
+router = APIRouter(prefix="/api/v1/certidoes", tags=["Certidões"])
+
+
+@router.get("")
+def listar_certidoes(empresa_id: int | None = Query(default=None)):
+    itens = listar(empresa_id)
+    return {"total": len(itens), "certidoes": itens}
+
+
+@router.get("/tipos")
+def listar_tipos():
+    return {"total": len(tipos()), "tipos": tipos()}
+
+
+@router.post("", status_code=201)
+def registrar_certidao(dados: CertidaoCreate):
+    try:
+        return registrar(dados.model_dump())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/estadual/consultar/{empresa_id}")
+async def consultar_certidao_estadual(empresa_id: int):
+    try:
+        return await consultar_estadual(empresa_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Não foi possível concluir a consulta na SEFAZ-PE.") from exc
+
+
+@router.post("/estadual/consultar-todas")
+async def consultar_todas_certidoes_estaduais():
+    try:
+        return await consultar_estadual_todas()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Não foi possível concluir o processamento em lote: {exc}") from exc
+
+
+@router.get("/estadual/empresa/{empresa_id}")
+def certidao_estadual_atual(empresa_id: int):
+    itens = listar(empresa_id)
+    item = next((x for x in itens if x.get("tipo_certidao") == "Estadual - SEFAZ"), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="Certidão Estadual não encontrada.")
+    return item
+
+
+@router.get("/estadual/empresa/{empresa_id}/historico")
+def historico_estadual(empresa_id: int):
+    conexao_itens = historico(empresa_id)
+    itens = [x for x in conexao_itens if x.get("tipo_certidao") == "Estadual - SEFAZ"]
+    return {"total": len(itens), "historico": itens}
+
+
+@router.get("/pdf")
+def visualizar_pdf(path: str):
+    try:
+        arquivo = obter_pdf_path(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not arquivo.is_file() or arquivo.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=404, detail="PDF não encontrado.")
+    return FileResponse(arquivo, media_type="application/pdf", filename=arquivo.name)
+
+
+@router.get("/{certidao_id}")
+def consultar_certidao(certidao_id: int):
+    itens = listar()
+    for item in itens:
+        if item["id"] == certidao_id:
+            return item
+    raise HTTPException(status_code=404, detail="Certidão não encontrada.")
+
+
+@router.get("/empresa/{empresa_id}/historico")
+def historico_certidoes(empresa_id: int, tipo_certidao_id: int | None = Query(default=None)):
+    itens = historico(empresa_id, tipo_certidao_id)
+    return {"total": len(itens), "historico": itens}
